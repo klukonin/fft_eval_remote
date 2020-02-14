@@ -1,0 +1,150 @@
+#!/bin/sh
+
+
+SERVER="192.168.1.5"
+PORT="7576"
+
+PHYNAME="$1"
+DRIVER="$2"
+
+BINS=128
+CHUNKS=4
+OFFSET=4 # Header + Tail. First line is 1
+HEADER=4 # First line number after the header
+
+
+
+FFT_FILE="/sys/kernel/debug/ieee80211/$PHYNAME/$DRIVER/spectral_scan0"
+#CHANNEL_LIST="36 40 44 48 52 56 60 100 104 108 112 116 120 124 128 132 136 140 149 153 157 161"
+
+#CHANNEL_LIST_UPPER="36 44 52 60 68 76 84 92 100 108 116 124 132 140 148 156 164 172"
+#CHANNEL_LIST_LOWER="40 48 56 64 72 80 88 96 104 112 120 128 136 144 152 160 168 176"
+
+CHANNEL_LIST_UPPER="36 44 52 60 68 76"                                           
+CHANNEL_LIST_LOWER="40 48 56 64 72 80" 
+
+PREFIX_DIR=/tmp/scans
+
+#echo disable > /sys/kernel/debug/ieee80211/$PHYNAME/$DRIVER/spectral_scan_ctl                            
+#iw reg set US
+
+echo "$CHUNKS" > /sys/kernel/debug/ieee80211/"$PHYNAME"/"$DRIVER"/spectral_count 
+echo "$BINS" > /sys/kernel/debug/ieee80211/"$PHYNAME"/"$DRIVER"/spectral_bins                                                                           
+
+sleep 1
+                                                                        
+#for channel in $CHANNEL_LIST ; do
+#
+#        echo "Tryung to set channel $channel"
+#        iw dev mon_5g set channel "$channel"
+#        echo disable > /sys/kernel/debug/ieee80211/phy0/ath10k/spectral_scan_ctl
+#        usleep 5000
+#done
+
+rm -rf "$PREFIX_DIR"
+mkdir "$PREFIX_DIR"
+
+while true ; do
+
+        line_buffer=$((BINS + OFFSET))
+
+        for channel in $CHANNEL_LIST_UPPER ; do                                                     
+                                                                                             
+                iw dev mon_5g set channel "$channel" HT40+
+                echo manual > /sys/kernel/debug/ieee80211/"$PHYNAME"/"$DRIVER"/spectral_scan_ctl
+                echo trigger > /sys/kernel/debug/ieee80211/"$PHYNAME"/"$DRIVER"/spectral_scan_ctl
+                usleep 10000
+                
+                /usr/bin/fft_eval_rtl_power_fftw "$FFT_FILE" > /tmp/FFT_BUFFER
+                
+                i=1
+                first_line=1
+                last_line=$line_buffer
+                
+                while [ "$i" -le "$CHUNKS" ] ; do
+                    
+                   cat /tmp/FFT_BUFFER | sed -n "$first_line,$last_line p" > "/tmp/fft_$channel-$i"
+                    
+                    freq=$(awk "FNR == $HEADER {print \$1}" < "/tmp/fft_$channel-$i")
+                    
+                    cat "/tmp/fft_$channel-$i" | head -n 120 > "$PREFIX_DIR/$freq-$i"
+                    printf "\n" >> "$PREFIX_DIR/$freq-$i"
+                    
+                    first_line=$((first_line + line_buffer))
+                    last_line=$((last_line + line_buffer))
+                    i=$((i + 1))
+                
+                done
+        done
+        
+        rm /tmp/fft_send_buffer
+        touch /tmp/fft_send_buffer
+        
+        i=1
+        while [ "$i" -le "$CHUNKS" ] ; do
+            
+            for file in $(find "$PREFIX_DIR/" -name "5*-$i" | sort -V) ; do
+                
+                cat "$file" >> /tmp/fft_send_buffer
+            
+            done
+            
+            printf "\n" >> /tmp/fft_send_buffer
+            
+            i=$((i + 1))
+        
+        done
+        
+        ncat -4 --send-only --udp "$SERVER" "$PORT" < /tmp/fft_send_buffer
+
+        for channel in $CHANNEL_LIST_LOWER ; do
+
+                iw dev mon_5g set channel "$channel" HT40-
+                echo manual > /sys/kernel/debug/ieee80211/"$PHYNAME"/"$DRIVER"/spectral_scan_ctl
+                echo trigger > /sys/kernel/debug/ieee80211/"$PHYNAME"/"$DRIVER"/spectral_scan_ctl
+                usleep 10000
+                
+                /usr/bin/fft_eval_rtl_power_fftw "$FFT_FILE" > /tmp/FFT_BUFFER
+                
+                i=1
+                first_line=1
+                last_line=$line_buffer
+                
+                while [ "$i" -le "$CHUNKS" ] ; do
+                    
+                    cat /tmp/FFT_BUFFER | sed -n "$first_line,$last_line p" > "/tmp/fft_$channel-$i"
+                    
+                    freq=$(awk "FNR == $HEADER {print \$1}" < "/tmp/fft_$channel-$i")
+                    
+                    cat "/tmp/fft_$channel-$i" | head -n 120 > "$PREFIX_DIR/$freq-$i"
+                    printf "\n" >> "$PREFIX_DIR/$freq-$i"
+                    
+                    first_line=$((first_line + line_buffer))
+                    last_line=$((last_line + line_buffer))
+                    i=$((i + 1))
+                
+                done
+        
+        done
+        
+        rm /tmp/fft_send_buffer
+        touch /tmp/fft_send_buffer
+        
+        i=1
+        while [ "$i" -le "$CHUNKS" ] ; do
+            
+            for file in $(find "$PREFIX_DIR/" -name "5*-$i" | sort -V) ; do
+                
+                cat "$file" >> /tmp/fft_send_buffer
+            
+            done
+            
+            printf "\n" >> /tmp/fft_send_buffer
+            
+            i=$((i + 1))
+        
+        done
+        
+        ncat -4 --send-only --udp "$SERVER" "$PORT" < /tmp/fft_send_buffer
+
+done
